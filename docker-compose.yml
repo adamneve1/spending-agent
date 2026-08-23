@@ -1,0 +1,11 @@
+services:
+  spending-agent:
+    build: .
+    container_name: spending-agent
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
