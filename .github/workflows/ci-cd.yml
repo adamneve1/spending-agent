@@ -42,19 +42,14 @@ jobs:
 
   deploy:
     name: Deploy to VM
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs:
       - test
       - docker
 
     steps:
       - name: Deploy
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
+        run: |
             cd /opt/spending-agent
             git pull origin main
             docker compose up -d --build
