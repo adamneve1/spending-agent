@@ -7,13 +7,15 @@ Telegram bot untuk mencatat pengeluaran ke Google Sheets menggunakan Gemini dan 
 ## V1: kelola transaksi
 
 Setiap transaksi baru sekarang mendapatkan Transaction ID, misalnya
-`EXP-20260805-A1B2C3D4`. Simpan ID tersebut untuk operasi berikut.
+`260826-01`. Enam angka pertama adalah tanggal transaksi (`DDMMYY`),
+sedangkan dua angka terakhir adalah urutan pengeluaran pada tanggal tersebut.
+Simpan ID ini untuk operasi berikut.
 
 - Tambah: `tadi makan siang 25 ribu`
-- Lihat: `cek EXP-20260805-A1B2C3D4`
+- Lihat: `cek 260826-01`
 - Cari: `cari pengeluaran food tanggal 05 Aug 2026`
-- Ubah: `ubah EXP-20260805-A1B2C3D4 jadi 30 ribu`
-- Hapus: `hapus EXP-20260805-A1B2C3D4`
+- Ubah: `ubah 260826-01 jadi 30 ribu`
+- Hapus: `hapus 260826-01`
 
 Secara default ID disimpan di kolom **A**, sementara kolom transaksi yang
 sudah ada tetap digunakan: tanggal C, deskripsi D, kategori F, dan nominal G.

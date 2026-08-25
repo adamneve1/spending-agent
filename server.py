@@ -2,7 +2,6 @@ import asyncio
 import os
 from datetime import datetime
 from typing import Optional
-from uuid import uuid4
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -34,12 +33,27 @@ def get_sheet():
 
 
 def make_transaction_id(date: str) -> str:
-    """Create a readable ID which remains unique across concurrent adds."""
+    """Create DDMMYY-NN, where NN is the expense order for that date."""
     try:
-        date_part = datetime.strptime(date, "%d %b %Y").strftime("%Y%m%d")
+        date_key = datetime.strptime(date, "%d %b %Y").strftime("%d%m%y")
     except ValueError:
-        date_part = datetime.now().strftime("%Y%m%d")
-    return f"EXP-{date_part}-{uuid4().hex[:8].upper()}"
+        date_key = datetime.now().strftime("%d%m%y")
+
+    prefix = f"{date_key}-"
+    existing_rows = get_sheet().get_all_values()
+    same_day_count = sum(
+        1
+        for values in existing_rows[FIRST_DATA_ROW - 1 :]
+        if _cell(values, DATE_COLUMN).strip() == date.strip()
+    )
+    existing_numbers = [
+        int(transaction_id[len(prefix) :])
+        for values in existing_rows[FIRST_DATA_ROW - 1 :]
+        if (transaction_id := _cell(values, ID_COLUMN)).startswith(prefix)
+        and transaction_id[len(prefix) :].isdigit()
+    ]
+    sequence = max([same_day_count, *existing_numbers], default=0) + 1
+    return f"{prefix}{sequence:02d}"
 
 
 def _cell(values: list[str], column: int) -> str:
@@ -77,7 +91,8 @@ def add_expense(date: str, description: str, category: str, amount: int) -> str:
     sheet = get_sheet()
     next_row = len(sheet.col_values(DATE_COLUMN)) + 1
     transaction_id = make_transaction_id(date)
-    sheet.update_cell(next_row, ID_COLUMN, transaction_id)
+    # Apostrophe makes Google Sheets keep IDs beginning with 0 as text.
+    sheet.update_cell(next_row, ID_COLUMN, f"'{transaction_id}")
     sheet.update_cell(next_row, DATE_COLUMN, date)
     sheet.update_cell(next_row, DESCRIPTION_COLUMN, description)
     sheet.update_cell(next_row, CATEGORY_COLUMN, category)

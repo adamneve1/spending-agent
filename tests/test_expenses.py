@@ -20,7 +20,8 @@ class FakeSheet:
             self.rows.append([])
         while len(self.rows[row - 1]) < column:
             self.rows[row - 1].append("")
-        self.rows[row - 1][column - 1] = str(value)
+        value = str(value)
+        self.rows[row - 1][column - 1] = value[1:] if value.startswith("'") else value
 
     def get_all_values(self):
         return self.rows
@@ -35,16 +36,24 @@ def setup_function():
 
 def test_add_creates_id_and_get_finds_expense():
     result = server.add_expense("05 Aug 2026", "Makan siang", "Food", 25000)
-    transaction_id = re.search(r"EXP-\d{8}-[A-F0-9]{8}", result).group(0)
+    transaction_id = re.search(r"\d{6}-\d{2}", result).group(0)
 
     assert "Transaction ID" in result
     assert transaction_id in server.get_expense(transaction_id.lower())
     assert "Makan siang" in server.get_expense(transaction_id)
 
 
+def test_ids_use_date_and_increment_for_same_day():
+    first = server.add_expense("05 Aug 2026", "Sarapan", "Food", 10000)
+    second = server.add_expense("05 Aug 2026", "Makan siang", "Food", 25000)
+
+    assert "050826-01" in first
+    assert "050826-02" in second
+
+
 def test_search_update_and_delete_expense():
     result = server.add_expense("05 Aug 2026", "Makan siang", "Food", 25000)
-    transaction_id = re.search(r"EXP-\d{8}-[A-F0-9]{8}", result).group(0)
+    transaction_id = re.search(r"\d{6}-\d{2}", result).group(0)
 
     assert transaction_id in server.search_expenses(category="food")
     assert "Makan malam" in server.update_expense(transaction_id, description="Makan malam", amount=30000)
@@ -54,7 +63,7 @@ def test_search_update_and_delete_expense():
 
 
 def test_update_requires_a_real_change_and_unknown_id_is_safe():
-    assert "tidak ditemukan" in server.delete_expense("EXP-UNKNOWN")
+    assert "tidak ditemukan" in server.delete_expense("0000000000")
     result = server.add_expense("05 Aug 2026", "Kopi", "Food", 10000)
-    transaction_id = re.search(r"EXP-\d{8}-[A-F0-9]{8}", result).group(0)
+    transaction_id = re.search(r"\d{6}-\d{2}", result).group(0)
     assert server.update_expense(transaction_id) == "Tidak ada perubahan yang diberikan."
