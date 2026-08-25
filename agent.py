@@ -457,6 +457,8 @@ async def main():
     server_params = StdioServerParameters(
         command="python",
         args=["server.py"],
+        # Pass Docker/.env variables to the separate MCP server process.
+        env=os.environ.copy(),
     )
 
     async with stdio_client(
