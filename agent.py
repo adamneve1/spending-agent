@@ -1,5 +1,7 @@
 import asyncio
 import os
+import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -23,11 +25,29 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+
+def parse_allowed_user_ids(value: str | None) -> frozenset[int]:
+    """Parse a comma-separated Telegram user-ID allowlist."""
+    if not value:
+        return frozenset()
+    try:
+        return frozenset(int(user_id.strip()) for user_id in value.split(",") if user_id.strip())
+    except ValueError as error:
+        raise RuntimeError("ALLOWED_TELEGRAM_USER_IDS harus berisi angka dipisahkan koma") from error
+
+
+ALLOWED_TELEGRAM_USER_IDS = parse_allowed_user_ids(
+    os.getenv("ALLOWED_TELEGRAM_USER_IDS")
+)
+
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY tidak ditemukan")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN tidak ditemukan")
+
+if not ALLOWED_TELEGRAM_USER_IDS:
+    raise RuntimeError("ALLOWED_TELEGRAM_USER_IDS tidak ditemukan atau kosong")
 
 
 gemini = genai.Client(api_key=GEMINI_API_KEY)
@@ -50,6 +70,9 @@ def mcp_tools_to_gemini(mcp_tools):
     declarations = []
 
     for tool in mcp_tools:
+        # Deletion is handled by the Telegram confirmation flow below.
+        if tool.name == "delete_expense":
+            continue
         declarations.append(
             types.FunctionDeclaration(
                 name=tool.name,
@@ -124,9 +147,9 @@ Use get_expense when the user provides a Transaction ID and asks to view it.
 Use search_expenses when the user asks to find/list expenses by text, date, or
 category. Use get_recent_expenses when the user asks for recent/latest/last
 expenses, for example "10 pengeluaran terakhir". Use update_expense only when
-the user provides a Transaction ID and
-the fields they want changed. Use delete_expense only when the user provides a
-Transaction ID and clearly asks to delete it. Never guess a Transaction ID.
+the user provides a Transaction ID and the fields they want changed. For a
+deletion request, tell the user to send exactly: "hapus <Transaction ID>".
+The bot will request confirmation. Never guess a Transaction ID.
 
 Extract:
 
@@ -194,6 +217,25 @@ tell the user briefly that it was recorded.
 
 mcp_session = None
 chat = None
+pending_deletions: dict[int, tuple[str, float]] = {}
+DELETE_CONFIRMATION_SECONDS = 300
+TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
+
+
+def _delete_request_id(message: str) -> str | None:
+    match = re.fullmatch(r"\s*hapus\s+(\d{6}-\d{2})\s*", message, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _delete_confirmation_id(message: str) -> str | None:
+    match = re.fullmatch(
+        r"\s*konfirmasi\s+hapus\s+(\d{6}-\d{2})\s*", message, re.IGNORECASE
+    )
+    return match.group(1) if match else None
+
+
+def _tool_result_text(result) -> str:
+    return str(result.structured_content if result.structured_content else result.content)
 
 
 # ============================================================
@@ -208,12 +250,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
 
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id not in ALLOWED_TELEGRAM_USER_IDS:
+        print(f"[SECURITY] Unauthorized Telegram user blocked: {user_id}")
+        return
+
     user_input = update.message.text
 
     if not user_input:
         return
 
-    print(f"\n[Telegram] {user_input}")
+    deletion_id = _delete_request_id(user_input)
+    confirmation_id = _delete_confirmation_id(user_input)
+
+    if deletion_id:
+        pending_deletions[user_id] = (deletion_id, time.monotonic() + DELETE_CONFIRMATION_SECONDS)
+        await update.message.reply_text(
+            f"Konfirmasi penghapusan {deletion_id} dengan mengirim: "
+            f"konfirmasi hapus {deletion_id}"
+        )
+        return
+
+    if confirmation_id:
+        pending = pending_deletions.get(user_id)
+        if not pending or pending[0] != confirmation_id or pending[1] < time.monotonic():
+            pending_deletions.pop(user_id, None)
+            await update.message.reply_text(
+                "Konfirmasi tidak valid atau sudah kedaluwarsa. Kirim `hapus <Transaction ID>` lagi."
+            )
+            return
+        pending_deletions.pop(user_id, None)
+        try:
+            result = await mcp_session.call_tool(
+                "delete_expense", arguments={"transaction_id": confirmation_id}
+            )
+            await update.message.reply_text(_tool_result_text(result))
+        except Exception as error:
+            print(f"[ERROR] Delete confirmation failed: {error!r}")
+            await update.message.reply_text("Penghapusan gagal diproses. Coba lagi.")
+        return
+
+    print(f"\n[Telegram] user={user_id}")
 
     try:
 

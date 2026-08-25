@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -15,7 +16,7 @@ DESCRIPTION_COLUMN = 4
 CATEGORY_COLUMN = 6
 AMOUNT_COLUMN = 7
 FIRST_DATA_ROW = 2
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XjZarTjEsYOjUpIGgRsYcYac156Pwm7ZS5xHQjeJTck")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Spending")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 INDONESIAN_MONTHS = {
@@ -33,6 +34,8 @@ INDONESIAN_MONTHS = {
     "Des": "Dec",
 }
 WIB = timezone(timedelta(hours=7), name="WIB")
+TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
+MAX_EXPENSE_AMOUNT = 100_000_000
 
 _sheet = None
 
@@ -41,6 +44,8 @@ def get_sheet():
     """Create the Sheets connection only when a tool is actually called."""
     global _sheet
     if _sheet is None:
+        if not SPREADSHEET_ID:
+            raise RuntimeError("SPREADSHEET_ID tidak ditemukan")
         credentials = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
         client = gspread.authorize(credentials)
         _sheet = client.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
@@ -94,6 +99,10 @@ def _find_expense(transaction_id: str) -> Optional[dict]:
     return None
 
 
+def _valid_transaction_id(transaction_id: str) -> bool:
+    return bool(TRANSACTION_ID_PATTERN.fullmatch(transaction_id.strip()))
+
+
 def _format_record(record: dict) -> str:
     return (
         f"{record['transaction_id'] or '(tanpa Transaction ID)'} | {record['date']} | "
@@ -114,6 +123,8 @@ def _parse_expense_date(value: str) -> datetime:
 
 def add_expense(date: str, description: str, category: str, amount: int) -> str:
     """Add an expense and return its generated Transaction ID."""
+    if not isinstance(amount, int) or isinstance(amount, bool) or not 0 < amount <= MAX_EXPENSE_AMOUNT:
+        return "Nominal expense harus berupa angka antara Rp1 dan Rp100.000.000."
     sheet = get_sheet()
     next_row = len(sheet.col_values(DATE_COLUMN)) + 1
     transaction_id = make_transaction_id(date)
@@ -131,6 +142,8 @@ def add_expense(date: str, description: str, category: str, amount: int) -> str:
 
 def get_expense(transaction_id: str) -> str:
     """Get one expense by its Transaction ID."""
+    if not _valid_transaction_id(transaction_id):
+        return "Format Transaction ID tidak valid. Contoh: 260826-01."
     record = _find_expense(transaction_id)
     if not record:
         return f"Expense dengan Transaction ID {transaction_id} tidak ditemukan."
@@ -189,6 +202,14 @@ def update_expense(
     amount: Optional[int] = None,
 ) -> str:
     """Update provided fields of an expense selected by Transaction ID."""
+    if not _valid_transaction_id(transaction_id):
+        return "Format Transaction ID tidak valid. Contoh: 260826-01."
+    if amount is not None and (
+        not isinstance(amount, int)
+        or isinstance(amount, bool)
+        or not 0 < amount <= MAX_EXPENSE_AMOUNT
+    ):
+        return "Nominal expense harus berupa angka antara Rp1 dan Rp100.000.000."
     record = _find_expense(transaction_id)
     if not record:
         return f"Expense dengan Transaction ID {transaction_id} tidak ditemukan."
@@ -205,6 +226,8 @@ def update_expense(
 
 def delete_expense(transaction_id: str) -> str:
     """Permanently delete an expense selected by Transaction ID."""
+    if not _valid_transaction_id(transaction_id):
+        return "Format Transaction ID tidak valid. Contoh: 260826-01."
     record = _find_expense(transaction_id)
     if not record:
         return f"Expense dengan Transaction ID {transaction_id} tidak ditemukan."

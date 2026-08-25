@@ -74,7 +74,12 @@ def test_search_update_and_delete_expense():
 
 
 def test_update_requires_a_real_change_and_unknown_id_is_safe():
-    assert "tidak ditemukan" in server.delete_expense("0000000000")
+    assert "tidak ditemukan" in server.delete_expense("010126-99")
     result = server.add_expense("05 Aug 2026", "Kopi", "Food", 10000)
     transaction_id = re.search(r"\d{6}-\d{2}", result).group(0)
     assert server.update_expense(transaction_id) == "Tidak ada perubahan yang diberikan."
+
+
+def test_rejects_invalid_transaction_ids_and_amounts():
+    assert "Format Transaction ID tidak valid" in server.get_expense("invalid")
+    assert "Nominal expense harus" in server.add_expense("05 Aug 2026", "Kopi", "Food", 0)

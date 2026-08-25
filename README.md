@@ -42,9 +42,20 @@ Google Sheets
 
 ## Run
 
+Create `.env` from `.env.example`, then set `ALLOWED_TELEGRAM_USER_IDS` to
+your numeric Telegram user ID. The bot will refuse to start without this
+allowlist.
+
 ```bash
 docker compose up -d --build
 ```
+
+## Keamanan
+
+- API keys, Spreadsheet ID, dan Telegram user ID disimpan di `.env`.
+- Hanya Telegram user ID dalam `ALLOWED_TELEGRAM_USER_IDS` yang dapat memakai bot.
+- Hapus transaksi membutuhkan dua pesan: `hapus 260826-01`, lalu
+  `konfirmasi hapus 260826-01` dalam waktu lima menit.
 
 ## CI/CD
 
