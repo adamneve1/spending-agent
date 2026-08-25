@@ -109,8 +109,15 @@ You are a personal spending assistant.
 
 Today's date is {TODAY}.
 
-When the user tells you about an expense,
-use the available add_expense tool.
+When the user tells you about a new expense, use add_expense.
+Always include the Transaction ID returned by add_expense in your reply; the
+user needs it to update or delete that expense later.
+
+Use get_expense when the user provides a Transaction ID and asks to view it.
+Use search_expenses when the user asks to find/list expenses by text, date, or
+category. Use update_expense only when the user provides a Transaction ID and
+the fields they want changed. Use delete_expense only when the user provides a
+Transaction ID and clearly asks to delete it. Never guess a Transaction ID.
 
 Extract:
 
@@ -228,11 +235,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # ADD EXPENSE
                 # --------------------------------------------
 
-                if function_call.name == "add_expense":
+                if function_call.name in {
+                    "add_expense",
+                    "update_expense",
+                    "search_expenses",
+                }:
 
-                    arguments["date"] = normalize_expense_date(
-                        arguments.get("date")
-                    )
+                    if arguments.get("date") is not None:
+                        arguments["date"] = normalize_expense_date(
+                            arguments["date"]
+                        )
 
                     category = arguments.get("category")
 
@@ -240,7 +252,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Hard validation
                     # ----------------------------------------
 
-                    if category not in ALLOWED_CATEGORIES:
+                    if (
+                        function_call.name in {"add_expense", "update_expense"}
+                        and category is not None
+                        and category not in ALLOWED_CATEGORIES
+                    ):
 
                         description = arguments.get(
                             "description",
