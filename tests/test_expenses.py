@@ -51,6 +51,17 @@ def test_ids_use_date_and_increment_for_same_day():
     assert "050826-02" in second
 
 
+def test_recent_expenses_are_sorted_by_date_not_sheet_row():
+    server.add_expense("02 Jan 2026", "Telur", "Food", 22000)
+    server.add_expense("26 Aug 2026", "Bensin", "Bensin", 35000)
+    server.add_expense("03 Jan 2026", "Kopi", "Food", 10000)
+
+    result = server.get_recent_expenses(limit=2)
+
+    assert "Bensin" in result.splitlines()[0]
+    assert "Kopi" in result.splitlines()[1]
+
+
 def test_search_update_and_delete_expense():
     result = server.add_expense("05 Aug 2026", "Makan siang", "Food", 25000)
     transaction_id = re.search(r"\d{6}-\d{2}", result).group(0)

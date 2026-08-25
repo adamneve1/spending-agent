@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import gspread
@@ -18,6 +18,21 @@ FIRST_DATA_ROW = 2
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "1XjZarTjEsYOjUpIGgRsYcYac156Pwm7ZS5xHQjeJTck")
 WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Spending")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+INDONESIAN_MONTHS = {
+    "Jan": "Jan",
+    "Feb": "Feb",
+    "Mar": "Mar",
+    "Apr": "Apr",
+    "Mei": "May",
+    "Jun": "Jun",
+    "Jul": "Jul",
+    "Agu": "Aug",
+    "Sep": "Sep",
+    "Okt": "Oct",
+    "Nov": "Nov",
+    "Des": "Dec",
+}
+WIB = timezone(timedelta(hours=7), name="WIB")
 
 _sheet = None
 
@@ -37,7 +52,7 @@ def make_transaction_id(date: str) -> str:
     try:
         date_key = datetime.strptime(date, "%d %b %Y").strftime("%d%m%y")
     except ValueError:
-        date_key = datetime.now().strftime("%d%m%y")
+        date_key = datetime.now(WIB).strftime("%d%m%y")
 
     prefix = f"{date_key}-"
     existing_rows = get_sheet().get_all_values()
@@ -84,6 +99,17 @@ def _format_record(record: dict) -> str:
         f"{record['transaction_id'] or '(tanpa Transaction ID)'} | {record['date']} | "
         f"{record['description']} | {record['category']} | Rp{record['amount']}"
     )
+
+
+def _parse_expense_date(value: str) -> datetime:
+    """Parse the English and Indonesian month labels used in the sheet."""
+    parts = value.strip().split()
+    if len(parts) == 3 and parts[1].title() in INDONESIAN_MONTHS:
+        value = f"{parts[0]} {INDONESIAN_MONTHS[parts[1].title()]} {parts[2]}"
+    try:
+        return datetime.strptime(value, "%d %b %Y")
+    except ValueError:
+        return datetime.min
 
 
 def add_expense(date: str, description: str, category: str, amount: int) -> str:
@@ -137,6 +163,24 @@ def search_expenses(
     return "\n".join(_format_record(record) for record in matches) if matches else "Tidak ada expense yang cocok."
 
 
+def get_recent_expenses(limit: int = 10) -> str:
+    """Get the most recent expenses, sorted by transaction date descending."""
+    limit = max(1, min(limit, 50))
+    records = [
+        _record(row_number, values)
+        for row_number, values in enumerate(get_sheet().get_all_values(), start=1)
+        if row_number >= FIRST_DATA_ROW
+        and any(
+            _cell(values, column)
+            for column in (DATE_COLUMN, DESCRIPTION_COLUMN, CATEGORY_COLUMN, AMOUNT_COLUMN)
+        )
+    ]
+    records.sort(key=lambda record: (_parse_expense_date(record["date"]), record["row"]), reverse=True)
+    if not records:
+        return "Belum ada expense."
+    return "\n".join(_format_record(record) for record in records[:limit])
+
+
 def update_expense(
     transaction_id: str,
     date: Optional[str] = None,
@@ -172,6 +216,7 @@ server = MCPServer(name="spending-agent", version="1.1.0")
 server.add_tool(add_expense, name="add_expense", description="Add an expense and return its Transaction ID.")
 server.add_tool(get_expense, name="get_expense", description="Get an expense by its Transaction ID.")
 server.add_tool(search_expenses, name="search_expenses", description="Search expenses by text, date, or category.")
+server.add_tool(get_recent_expenses, name="get_recent_expenses", description="Get the latest expenses sorted by date, not sheet row order.")
 server.add_tool(update_expense, name="update_expense", description="Update an expense by its Transaction ID.")
 server.add_tool(delete_expense, name="delete_expense", description="Delete an expense by its Transaction ID.")
 

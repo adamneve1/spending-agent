@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import date, datetime
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from google import genai
@@ -32,7 +32,14 @@ if not TELEGRAM_BOT_TOKEN:
 
 gemini = genai.Client(api_key=GEMINI_API_KEY)
 
-TODAY = date.today().strftime("%d %b %Y")
+WIB = timezone(timedelta(hours=7), name="WIB")
+
+
+def today_wib():
+    return datetime.now(WIB).date()
+
+
+TODAY = today_wib().strftime("%d %b %Y")
 
 
 # ============================================================
@@ -59,7 +66,7 @@ def mcp_tools_to_gemini(mcp_tools):
 # ============================================================
 
 def normalize_expense_date(value):
-    today = date.today()
+    today = today_wib()
 
     if not value:
         return today.strftime("%d %b %Y")
@@ -115,7 +122,9 @@ user needs it to update or delete that expense later.
 
 Use get_expense when the user provides a Transaction ID and asks to view it.
 Use search_expenses when the user asks to find/list expenses by text, date, or
-category. Use update_expense only when the user provides a Transaction ID and
+category. Use get_recent_expenses when the user asks for recent/latest/last
+expenses, for example "10 pengeluaran terakhir". Use update_expense only when
+the user provides a Transaction ID and
 the fields they want changed. Use delete_expense only when the user provides a
 Transaction ID and clearly asks to delete it. Never guess a Transaction ID.
 

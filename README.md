@@ -14,6 +14,7 @@ Simpan ID ini untuk operasi berikut.
 - Tambah: `tadi makan siang 25 ribu`
 - Lihat: `cek 260826-01`
 - Cari: `cari pengeluaran food tanggal 05 Aug 2026`
+- Terakhir: `cek 10 pengeluaran terakhir`
 - Ubah: `ubah 260826-01 jadi 30 ribu`
 - Hapus: `hapus 260826-01`
 
