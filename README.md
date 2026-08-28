@@ -15,6 +15,8 @@ Simpan ID ini untuk operasi berikut.
 - Lihat: `cek 260826-01`
 - Cari: `cari pengeluaran food tanggal 05 Aug 2026`
 - Terakhir: `cek 10 pengeluaran terakhir`
+- Rekap: `total spending minggu ini`, `total spending bulan ini`, atau `total spending Februari 2026`
+- Bandingkan: `bandingkan Februari vs Januari` atau `bandingkan Februari vs Januari 2026`
 - Ubah: `ubah 260826-01 jadi 30 ribu`
 - Hapus: `hapus 260826-01`
 

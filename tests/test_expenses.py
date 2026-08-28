@@ -1,5 +1,6 @@
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 # GitHub Actions may collect tests with only the tests directory on sys.path.
@@ -83,3 +84,48 @@ def test_update_requires_a_real_change_and_unknown_id_is_safe():
 def test_rejects_invalid_transaction_ids_and_amounts():
     assert "Format Transaction ID tidak valid" in server.get_expense("invalid")
     assert "Nominal expense harus" in server.add_expense("05 Aug 2026", "Kopi", "Food", 0)
+
+
+def test_spending_summary_for_current_week_and_month(monkeypatch):
+    monkeypatch.setattr(server, "_today_wib", lambda: date(2026, 8, 28))
+    server.add_expense("03 Aug 2026", "Kopi lama", "Food", 10000)
+    server.add_expense("24 Aug 2026", "Makan", "Food", 25000)
+    server.add_expense("27 Aug 2026", "Bensin", "Bensin", 35000)
+    server.add_expense("29 Aug 2026", "Masa depan", "Food", 50000)
+
+    week = server.get_spending_summary("week")
+    month = server.get_spending_summary("month")
+
+    assert "Total pengeluaran minggu ini (24 Aug 2026–28 Aug 2026): Rp60,000" in week
+    assert "Food: Rp25,000" in week
+    assert "Bensin: Rp35,000" in week
+    assert "Total pengeluaran bulan ini (01 Aug 2026–28 Aug 2026): Rp70,000" in month
+    assert "Jumlah transaksi: 3" in month
+
+
+def test_spending_summary_for_a_selected_month(monkeypatch):
+    monkeypatch.setattr(server, "_today_wib", lambda: date(2026, 8, 28))
+    server.add_expense("02 Feb 2026", "Makan", "Food", 25000)
+    server.add_expense("27 Feb 2026", "Bensin", "Bensin", 35000)
+    server.add_expense("01 Mar 2026", "Tidak dihitung", "Food", 50000)
+
+    result = server.get_spending_summary("month", month=2, year=2026)
+
+    assert "Total pengeluaran Februari 2026 (01 Feb 2026–28 Feb 2026): Rp60,000" in result
+    assert "Jumlah transaksi: 2" in result
+    assert "Tidak dihitung" not in result
+
+
+def test_compare_monthly_spending(monkeypatch):
+    monkeypatch.setattr(server, "_today_wib", lambda: date(2026, 8, 28))
+    server.add_expense("02 Jan 2026", "Makan", "Food", 20000)
+    server.add_expense("15 Feb 2026", "Makan", "Food", 30000)
+    server.add_expense("18 Feb 2026", "Bensin", "Bensin", 35000)
+
+    result = server.compare_monthly_spending(2, 1, 2026)
+
+    assert "Perbandingan Februari 2026 vs Januari 2026" in result
+    assert "- Februari 2026: Rp65,000 (2 transaksi)" in result
+    assert "- Januari 2026: Rp20,000 (1 transaksi)" in result
+    assert "Selisih: naik Rp45,000" in result
+    assert "Food: Rp30,000 vs Rp20,000 (naik Rp10,000)" in result
