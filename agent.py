@@ -59,7 +59,13 @@ def today_wib():
     return datetime.now(WIB).date()
 
 
-TODAY = today_wib().strftime("%d %b %Y")
+def current_date_context() -> str:
+    """Return a fresh date reference for every incoming Telegram message."""
+    return (
+        "[SYSTEM CONTEXT — use this as the authoritative current date, not "
+        "any date from earlier conversation]\n"
+        f"Today's date in WIB (UTC+7) is {today_wib().strftime('%d %b %Y')}."
+    )
 
 
 # ============================================================
@@ -134,10 +140,11 @@ ALLOWED_CATEGORIES = {
 # GEMINI SYSTEM PROMPT
 # ============================================================
 
-SYSTEM_PROMPT = f"""
+SYSTEM_PROMPT = """
 You are a personal spending assistant.
 
-Today's date is {TODAY}.
+Each incoming message is prefixed with a SYSTEM CONTEXT containing the current
+date in WIB (UTC+7). Treat that value as the authoritative current date.
 
 When the user tells you about a new expense, use add_expense.
 Always include the Transaction ID returned by add_expense in your reply; the
@@ -308,7 +315,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = await asyncio.to_thread(
             chat.send_message,
-            user_input
+            f"{current_date_context()}\n\nUser message:\n{user_input}",
         )
 
         # ----------------------------------------------------
