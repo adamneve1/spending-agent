@@ -19,6 +19,8 @@ from telegram.ext import (
     filters,
 )
 
+from scheduler import FinancialReportScheduler, ReportScheduleConfig
+
 
 load_dotenv()
 
@@ -166,6 +168,9 @@ Use get_expense when the user provides a Transaction ID and asks to view it.
 Use get_financial_balance for questions about saldo, sisa uang, income, total
 spending report, or kondisi keuangan. Its factual response is rendered directly
 from MCP, so never invent or restate financial figures.
+For a direct question about saldo/sisa, income, or total spending without a
+named date range, always use get_financial_balance. Do not use a spending
+summary for those questions.
 Use search_expenses when the user asks to find/list expenses by text, date, or
 category. Use get_recent_expenses when the user asks for recent/latest/last
 expenses, for example "10 pengeluaran terakhir". Use get_spending_summary when
@@ -294,6 +299,37 @@ def _add_expense_reply(tool_result: object) -> str:
             "Coba cek transaksi terbaru sebelum melakukan update atau hapus."
         )
     return f"Siap Bos, pengeluaran sudah dicatat.\nTransaction ID: {transaction_id}"
+
+
+def _financial_balance_reply(user_input: str, tool_result: object) -> str:
+    """Select exact MCP figures for a financial question without calculating."""
+    result_text = str(tool_result)
+    values = {
+        name: match.group(1)
+        for name, match in (
+            ("income", re.search(r"Total Income:\s*(Rp[\d,.]+)", result_text, re.IGNORECASE)),
+            ("spending", re.search(r"Total Spending:\s*(Rp[\d,.]+)", result_text, re.IGNORECASE)),
+            ("balance", re.search(r"Sisa Duit:\s*(Rp[\d,.]+)", result_text, re.IGNORECASE)),
+        )
+        if match
+    }
+    if len(values) != 3:
+        return result_text
+
+    message = user_input.lower()
+    overview_words = ("cek keuangan", "kondisi keuangan", "overview", "rekap", "financial report")
+    if any(word in message for word in overview_words):
+        return (
+            "Siap Bos.\n\n"
+            f"Total Income: {values['income']}\n"
+            f"Total Spending: {values['spending']}\n"
+            f"Sisa Duit: {values['balance']}"
+        )
+    if "income" in message or "pendapatan" in message:
+        return f"Total income lu {values['income']}, Bos."
+    if "spending" in message or "pengeluaran" in message:
+        return f"Total spending lu {values['spending']}, Bos."
+    return f"Saldo lu sekarang {values['balance']}, Bos."
 
 
 # ============================================================
@@ -470,7 +506,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     direct_reply = _add_expense_reply(tool_result)
                     break
                 if function_call.name == "get_financial_balance":
-                    direct_reply = tool_result
+                    direct_reply = _financial_balance_reply(user_input, tool_result)
                     break
 
                 # --------------------------------------------
@@ -596,6 +632,17 @@ async def main():
             await app.initialize()
             await app.start()
             await app.updater.start_polling()
+            report_task = None
+            try:
+                report_scheduler = FinancialReportScheduler(
+                    ReportScheduleConfig.from_env(
+                        allowed_chat_ids=tuple(ALLOWED_TELEGRAM_USER_IDS)
+                    ),
+                    lambda chat_id, text: app.bot.send_message(chat_id=chat_id, text=text),
+                )
+                report_task = asyncio.create_task(report_scheduler.run())
+            except (TypeError, ValueError) as error:
+                print(f"[REPORT] Scheduler disabled due to configuration error: {error}")
 
             try:
 
@@ -604,7 +651,12 @@ async def main():
                     await asyncio.sleep(3600)
 
             finally:
-
+                if report_task is not None:
+                    report_task.cancel()
+                    try:
+                        await report_task
+                    except asyncio.CancelledError:
+                        pass
                 await app.updater.stop()
                 await app.stop()
                 await app.shutdown()

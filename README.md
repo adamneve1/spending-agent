@@ -59,6 +59,27 @@ docker compose up -d --build
 - Hapus transaksi membutuhkan dua pesan: `hapus 260826-01`, lalu
   `konfirmasi hapus 260826-01` dalam waktu lima menit.
 
+## Scheduled financial report
+
+Laporan otomatis dikirim hanya ke chat yang ada di `ALLOWED_TELEGRAM_USER_IDS`.
+Secara default seluruh scheduler nonaktif. Konfigurasikan melalui `.env`:
+
+```dotenv
+REPORT_TIMEZONE=Asia/Jakarta
+DAILY_REPORT_ENABLED=true
+DAILY_REPORT_TIME=21:00
+WEEKLY_REPORT_ENABLED=false
+WEEKLY_REPORT_DAY=monday
+WEEKLY_REPORT_TIME=09:00
+MONTHLY_REPORT_ENABLED=false
+MONTHLY_REPORT_DAY=1
+MONTHLY_REPORT_TIME=09:00
+```
+
+Opsional, `REPORT_TELEGRAM_CHAT_IDS` dapat membatasi penerima lebih lanjut;
+ID di luar allowlist akan diabaikan. State laporan disimpan di Docker volume
+agar restart container tidak mengirim ulang laporan pada jadwal yang sama.
+
 ## CI/CD
 
 ```text

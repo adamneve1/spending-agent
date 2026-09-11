@@ -33,3 +33,31 @@ def test_agent_never_invents_a_missing_or_invalid_transaction_id(agent_module):
     assert "Transaction ID gagal diperoleh" in missing
     assert "Transaction ID gagal diperoleh" in invalid
     assert "110926-01" not in missing + invalid
+
+
+@pytest.mark.parametrize(
+    ("question", "expected", "excluded"),
+    [
+        ("saldo gue berapa?", "Saldo lu sekarang Rp3,199,375, Bos.", "Total Income"),
+        ("sisa duit gue berapa?", "Saldo lu sekarang Rp3,199,375, Bos.", "Total Spending"),
+        ("total spending gue berapa?", "Total spending lu Rp2,548,500, Bos.", "Total Income"),
+        ("income gue berapa?", "Total income lu Rp5,747,875, Bos.", "Sisa Duit"),
+    ],
+)
+def test_agent_selects_only_the_requested_balance_figure(agent_module, question, expected, excluded):
+    result = "Total Income: Rp5,747,875\nTotal Spending: Rp2,548,500\nSisa Duit: Rp3,199,375"
+
+    reply = agent_module._financial_balance_reply(question, result)
+
+    assert reply == expected
+    assert excluded not in reply
+
+
+def test_agent_returns_all_mcp_figures_for_financial_overview(agent_module):
+    result = "Total Income: Rp5,747,875\nTotal Spending: Rp2,548,500\nSisa Duit: Rp3,199,375"
+
+    reply = agent_module._financial_balance_reply("cek keuangan gue", result)
+
+    assert "Total Income: Rp5,747,875" in reply
+    assert "Total Spending: Rp2,548,500" in reply
+    assert "Sisa Duit: Rp3,199,375" in reply

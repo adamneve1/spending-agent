@@ -202,6 +202,19 @@ def _find_dashboard_metric(values: list[list[object]], label: str) -> Optional[i
 
 def get_financial_balance() -> str:
     """Read actual income and spending cards from the Report dashboard."""
+    balance_data = get_financial_balance_data()
+    if isinstance(balance_data, str):
+        return balance_data
+    return (
+        "Siap Bos.\n\n"
+        f"Total Income: Rp{balance_data['income']:,}\n"
+        f"Total Spending: Rp{balance_data['spending']:,}\n"
+        f"Sisa Duit: Rp{balance_data['balance']:,}"
+    )
+
+
+def get_financial_balance_data() -> dict[str, int] | str:
+    """Return Report dashboard figures for code that must not parse display text."""
     try:
         response = get_spreadsheet().values_get(
             REPORT_DASHBOARD_RANGE,
@@ -221,13 +234,7 @@ def get_financial_balance() -> str:
         return f"Nilai {missing} tidak ditemukan atau tidak valid di dashboard Report."
 
     # Actual balance is intentionally based on spending, never Budgeted Expenses.
-    balance = income - spending
-    return (
-        "Siap Bos.\n\n"
-        f"Total Income: Rp{income:,}\n"
-        f"Total Spending: Rp{spending:,}\n"
-        f"Sisa Duit: Rp{balance:,}"
-    )
+    return {"income": income, "spending": spending, "balance": income - spending}
 
 
 def _records_in_date_range(start_date: date, end_date: date) -> list[dict]:

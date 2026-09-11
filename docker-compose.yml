@@ -9,3 +9,7 @@ services:
 
     volumes:
       - ./credentials.json:/app/credentials.json:ro
+      - report-scheduler-state:/app/data
+
+volumes:
+  report-scheduler-state:
