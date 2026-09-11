@@ -43,18 +43,26 @@ TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
 MAX_EXPENSE_AMOUNT = 100_000_000
 
 _sheet = None
+_spreadsheet = None
 
 
 def get_sheet():
     """Create the Sheets connection only when a tool is actually called."""
-    global _sheet
+    global _sheet, _spreadsheet
     if _sheet is None:
         if not SPREADSHEET_ID:
             raise RuntimeError("SPREADSHEET_ID tidak ditemukan")
         credentials = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
         client = gspread.authorize(credentials)
-        _sheet = client.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
+        _spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        _sheet = _spreadsheet.worksheet(WORKSHEET_NAME)
     return _sheet
+
+
+def get_spreadsheet():
+    """Return the workbook backing the spending sheet."""
+    sheet = get_sheet()
+    return _spreadsheet or getattr(sheet, "spreadsheet", None)
 
 
 def make_transaction_id(date: str) -> str:
@@ -134,6 +142,61 @@ def _parse_expense_amount(value: str) -> int:
     """Read Rupiah amounts stored as either plain or formatted sheet values."""
     digits = re.sub(r"\D", "", str(value))
     return int(digits) if digits else 0
+
+
+def _parse_report_amount(value: object) -> Optional[int]:
+    """Parse a numeric Report value without treating labels as zero."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    digits = re.sub(r"\D", "", text)
+    return int(digits) if text and digits else None
+
+
+def get_financial_balance() -> str:
+    """Read income and spending totals directly from Report!O8:P9."""
+    try:
+        response = get_spreadsheet().values_get("Report!O8:P9")
+    except Exception as error:
+        return f"Gagal membaca Report!O8:P9: {error}"
+
+    values = response.get("values", []) if isinstance(response, dict) else []
+    if not values:
+        return "Data Report!O8:P9 kosong atau tidak ditemukan."
+
+    report: dict[str, int] = {}
+    for row in values:
+        if not isinstance(row, list) or len(row) < 2:
+            return "Format Report!O8:P9 tidak sesuai. Harus berisi label dan nilai."
+        label = re.sub(r"\s+", " ", str(row[0]).strip().lower())
+        amount = _parse_report_amount(row[1])
+        if amount is None:
+            return "Format nilai di Report!O8:P9 tidak valid."
+        if "income" in label or "pendapatan" in label:
+            report["income"] = amount
+        elif "spending" in label or "pengeluaran" in label:
+            report["spending"] = amount
+        elif any(word in label for word in ("balance", "saldo", "sisa", "remaining")):
+            report["balance"] = amount
+        else:
+            return f"Label Report!O8:P9 tidak dikenali: {row[0]}."
+
+    if "income" not in report or "spending" not in report:
+        return "Report!O8:P9 harus menyediakan Total Income dan Total Spending."
+
+    balance_from_report = "balance" in report
+    balance = report["balance"] if balance_from_report else report["income"] - report["spending"]
+    result = (
+        "Siap Bos.\n\n"
+        f"Total income: Rp{report['income']:,}\n"
+        f"Total spending: Rp{report['spending']:,}\n"
+        f"Sisa: Rp{balance:,}"
+    )
+    if not balance_from_report:
+        result += "\n(Sisa dihitung dari Total Income - Total Spending di Report.)"
+    return result
 
 
 def _records_in_date_range(start_date: date, end_date: date) -> list[dict]:
@@ -387,6 +450,7 @@ server.add_tool(search_expenses, name="search_expenses", description="Search exp
 server.add_tool(get_recent_expenses, name="get_recent_expenses", description="Get the latest expenses sorted by date, not sheet row order.")
 server.add_tool(get_spending_summary, name="get_spending_summary", description="Get total spending and category totals for the current WIB week or current WIB month.")
 server.add_tool(compare_monthly_spending, name="compare_monthly_spending", description="Compare total spending and category totals for two selected months in the same year.")
+server.add_tool(get_financial_balance, name="get_financial_balance", description="Read Total Income, Total Spending, and balance from Report!O8:P9.")
 server.add_tool(update_expense, name="update_expense", description="Update an expense by its Transaction ID.")
 server.add_tool(delete_expense, name="delete_expense", description="Delete an expense by its Transaction ID.")
 

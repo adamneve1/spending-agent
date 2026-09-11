@@ -33,6 +33,17 @@ class FakeSheet:
 
 def setup_function():
     server._sheet = FakeSheet()
+    server._spreadsheet = None
+
+
+class FakeSpreadsheet:
+    def __init__(self, values):
+        self.values = values
+        self.requested_ranges = []
+
+    def values_get(self, cell_range):
+        self.requested_ranges.append(cell_range)
+        return {"values": self.values}
 
 
 def test_add_creates_id_and_get_finds_expense():
@@ -50,6 +61,34 @@ def test_ids_use_date_and_increment_for_same_day():
 
     assert "050826-01" in first
     assert "050826-02" in second
+
+
+def test_balance_reads_report_range_and_calculates_when_balance_is_absent():
+    report = FakeSpreadsheet([
+        ["Total Income", "Rp7.000.000"],
+        ["Total Spending", "Rp2.500.000"],
+    ])
+    server._spreadsheet = report
+
+    result = server.get_financial_balance()
+
+    assert report.requested_ranges == ["Report!O8:P9"]
+    assert "Total income: Rp7,000,000" in result
+    assert "Total spending: Rp2,500,000" in result
+    assert "Sisa: Rp4,500,000" in result
+    assert "dihitung" in result
+    assert report.values == [
+        ["Total Income", "Rp7.000.000"],
+        ["Total Spending", "Rp2.500.000"],
+    ]
+
+
+def test_balance_rejects_empty_or_invalid_report_data():
+    server._spreadsheet = FakeSpreadsheet([])
+    assert "kosong atau tidak ditemukan" in server.get_financial_balance()
+
+    server._spreadsheet = FakeSpreadsheet([["Total Income", "Rp7.000.000"], ["Total Spending"]])
+    assert "tidak sesuai" in server.get_financial_balance()
 
 
 def test_recent_expenses_are_sorted_by_date_not_sheet_row():

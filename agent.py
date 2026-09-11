@@ -153,15 +153,19 @@ Keep normal replies short and direct. Do not use stiff phrases such as
 diberikan". Use everyday wording such as "Siap, sudah aku catat" or
 "Boleh, pengeluaran mana yang mau dicari?" when appropriate. Do not overuse
 emoji; use at most one only when it genuinely fits. For a successful expense,
-state the important details clearly and always include its Transaction ID.
+state the important details clearly. The application, not you, renders its ID.
 Address the user as "Bos" naturally, usually at the start or end of a reply;
 do not repeat the salutation more than once in a single reply.
 
 When the user tells you about a new expense, use add_expense.
-Always include the Transaction ID returned by add_expense in your reply; the
-user needs it to update or delete that expense later.
+Never create, calculate, modify, infer, or repeat a Transaction ID. Transaction
+IDs are created only by the MCP server and rendered directly by the application
+from the add_expense tool result.
 
 Use get_expense when the user provides a Transaction ID and asks to view it.
+Use get_financial_balance for questions about saldo, sisa uang, income, total
+spending report, or kondisi keuangan. Its factual response is rendered directly
+from MCP, so never invent or restate financial figures.
 Use search_expenses when the user asks to find/list expenses by text, date, or
 category. Use get_recent_expenses when the user asks for recent/latest/last
 expenses, for example "10 pengeluaran terakhir". Use get_spending_summary when
@@ -261,7 +265,35 @@ def _delete_confirmation_id(message: str) -> str | None:
 
 
 def _tool_result_text(result) -> str:
-    return str(result.structured_content if result.structured_content else result.content)
+    structured_content = getattr(result, "structured_content", None)
+    if structured_content:
+        if isinstance(structured_content, dict) and "result" in structured_content:
+            return str(structured_content["result"])
+        return str(structured_content)
+    content = getattr(result, "content", result)
+    if isinstance(content, list):
+        return "\n".join(str(getattr(item, "text", item)) for item in content)
+    return str(content)
+
+
+def _add_expense_transaction_id(tool_result: object) -> str | None:
+    """Extract only the server-returned Transaction ID; never manufacture one."""
+    match = re.search(r"Transaction ID:\s*(\d{6}-\d{2})(?!\d)", str(tool_result))
+    return match.group(1) if match and TRANSACTION_ID_PATTERN.fullmatch(match.group(1)) else None
+
+
+def _add_expense_reply(tool_result: object) -> str:
+    """Build a reply from MCP's exact ID, bypassing the LLM."""
+    result_text = str(tool_result)
+    if "Expense berhasil ditambahkan" not in result_text:
+        return result_text
+    transaction_id = _add_expense_transaction_id(result_text)
+    if transaction_id is None:
+        return (
+            "Siap Bos, transaksi sudah tercatat, tapi Transaction ID gagal diperoleh. "
+            "Coba cek transaksi terbaru sebelum melakukan update atau hapus."
+        )
+    return f"Siap Bos, pengeluaran sudah dicatat.\nTransaction ID: {transaction_id}"
 
 
 # ============================================================
@@ -333,6 +365,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Gemini meminta MCP tool
         # ----------------------------------------------------
 
+        direct_reply = None
         if response.function_calls:
 
             for function_call in response.function_calls:
@@ -430,6 +463,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     arguments=arguments,
                 )
 
+                tool_result = _tool_result_text(result)
+                # Gemini may understand intent and parameters, but it must not
+                # generate transaction IDs or financial values.
+                if function_call.name == "add_expense":
+                    direct_reply = _add_expense_reply(tool_result)
+                    break
+                if function_call.name == "get_financial_balance":
+                    direct_reply = tool_result
+                    break
+
                 # --------------------------------------------
                 # MCP → Gemini
                 # --------------------------------------------
@@ -454,7 +497,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ----------------------------------------------------
 
         await update.message.reply_text(
-            response.text
+            direct_reply if direct_reply is not None else response.text
         )
 
     except Exception as e:
