@@ -41,6 +41,7 @@ INDONESIAN_MONTH_NAMES = (
 WIB = timezone(timedelta(hours=7), name="WIB")
 TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
 MAX_EXPENSE_AMOUNT = 100_000_000
+REPORT_DASHBOARD_RANGE = "Report!A1:AZ200"
 
 _sheet = None
 _spreadsheet = None
@@ -155,48 +156,78 @@ def _parse_report_amount(value: object) -> Optional[int]:
     return int(digits) if text and digits else None
 
 
+def _normalise_report_label(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value).strip().rstrip(":").lower())
+
+
+def _find_dashboard_metric(values: list[list[object]], label: str) -> Optional[int]:
+    """Find the calculated value in a merged dashboard card by its label.
+
+    Google Sheets returns only the top-left cell of each merged region.  A card
+    label and its formula result therefore do not form a conventional two-column
+    table.  We locate the label first, then use the nearest numeric cell in that
+    card area.  The full dashboard range is read as formatted values, so formulas
+    are returned as their calculated results rather than formula text.
+    """
+    normalized_label = _normalise_report_label(label)
+    label_positions = [
+        (row_index, column_index)
+        for row_index, row in enumerate(values)
+        for column_index, cell in enumerate(row)
+        if _normalise_report_label(cell) == normalized_label
+    ]
+    if not label_positions:
+        return None
+
+    candidates: list[tuple[tuple[int, int, int, int], int]] = []
+    for label_row, label_column in label_positions:
+        for row_index, row in enumerate(values):
+            for column_index, cell in enumerate(row):
+                amount = _parse_report_amount(cell)
+                if amount is None:
+                    continue
+                row_distance = abs(row_index - label_row)
+                column_distance = abs(column_index - label_column)
+                # A card value is normally directly below its label.  Retain a
+                # small card neighbourhood so a value belonging to another card
+                # (such as Budgeted Expenses) cannot be selected from afar.
+                if row_distance > 3 or column_distance > 3:
+                    continue
+                direction_rank = 0 if column_distance == 0 and row_index > label_row else 1
+                axis_rank = 0 if column_distance == 0 else 1 if row_distance == 0 else 2
+                candidates.append(((row_distance + column_distance, direction_rank, axis_rank, row_index), amount))
+
+    return min(candidates, key=lambda candidate: candidate[0])[1] if candidates else None
+
+
 def get_financial_balance() -> str:
-    """Read income and spending totals directly from Report!O8:P9."""
+    """Read actual income and spending cards from the Report dashboard."""
     try:
-        response = get_spreadsheet().values_get("Report!O8:P9")
+        response = get_spreadsheet().values_get(
+            REPORT_DASHBOARD_RANGE,
+            params={"valueRenderOption": "FORMATTED_VALUE"},
+        )
     except Exception as error:
-        return f"Gagal membaca Report!O8:P9: {error}"
+        return f"Gagal membaca dashboard Report: {error}"
 
     values = response.get("values", []) if isinstance(response, dict) else []
     if not values:
-        return "Data Report!O8:P9 kosong atau tidak ditemukan."
+        return "Data dashboard Report kosong atau tidak ditemukan."
 
-    report: dict[str, int] = {}
-    for row in values:
-        if not isinstance(row, list) or len(row) < 2:
-            return "Format Report!O8:P9 tidak sesuai. Harus berisi label dan nilai."
-        label = re.sub(r"\s+", " ", str(row[0]).strip().lower())
-        amount = _parse_report_amount(row[1])
-        if amount is None:
-            return "Format nilai di Report!O8:P9 tidak valid."
-        if "income" in label or "pendapatan" in label:
-            report["income"] = amount
-        elif "spending" in label or "pengeluaran" in label:
-            report["spending"] = amount
-        elif any(word in label for word in ("balance", "saldo", "sisa", "remaining")):
-            report["balance"] = amount
-        else:
-            return f"Label Report!O8:P9 tidak dikenali: {row[0]}."
+    income = _find_dashboard_metric(values, "Total Income")
+    spending = _find_dashboard_metric(values, "Total Spending")
+    if income is None or spending is None:
+        missing = "Total Income" if income is None else "Total Spending"
+        return f"Nilai {missing} tidak ditemukan atau tidak valid di dashboard Report."
 
-    if "income" not in report or "spending" not in report:
-        return "Report!O8:P9 harus menyediakan Total Income dan Total Spending."
-
-    balance_from_report = "balance" in report
-    balance = report["balance"] if balance_from_report else report["income"] - report["spending"]
-    result = (
+    # Actual balance is intentionally based on spending, never Budgeted Expenses.
+    balance = income - spending
+    return (
         "Siap Bos.\n\n"
-        f"Total income: Rp{report['income']:,}\n"
-        f"Total spending: Rp{report['spending']:,}\n"
-        f"Sisa: Rp{balance:,}"
+        f"Total Income: Rp{income:,}\n"
+        f"Total Spending: Rp{spending:,}\n"
+        f"Sisa Duit: Rp{balance:,}"
     )
-    if not balance_from_report:
-        result += "\n(Sisa dihitung dari Total Income - Total Spending di Report.)"
-    return result
 
 
 def _records_in_date_range(start_date: date, end_date: date) -> list[dict]:

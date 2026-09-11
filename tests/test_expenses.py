@@ -41,7 +41,7 @@ class FakeSpreadsheet:
         self.values = values
         self.requested_ranges = []
 
-    def values_get(self, cell_range):
+    def values_get(self, cell_range, params=None):
         self.requested_ranges.append(cell_range)
         return {"values": self.values}
 
@@ -63,32 +63,38 @@ def test_ids_use_date_and_increment_for_same_day():
     assert "050826-02" in second
 
 
-def test_balance_reads_report_range_and_calculates_when_balance_is_absent():
+def test_balance_reads_merged_dashboard_cards_and_ignores_budgeted_expenses():
+    # Each card's value is on the row below its label, as Google Sheets exposes
+    # merged cells: only the top-left cell of each merged region has a value.
     report = FakeSpreadsheet([
-        ["Total Income", "Rp7.000.000"],
-        ["Total Spending", "Rp2.500.000"],
+        ["", "Total Income", "", "", "Budgeted Expenses", "", "", "Total Spending"],
+        ["", "Rp5.747.875", "", "", "Rp2.313.000", "", "", "Rp2.548.500"],
+        ["", "Monthly Savings", "", "", "Sisa Duit"],
+        ["", "Rp0", "", "", "Rp3.199.375"],
     ])
     server._spreadsheet = report
 
     result = server.get_financial_balance()
 
-    assert report.requested_ranges == ["Report!O8:P9"]
-    assert "Total income: Rp7,000,000" in result
-    assert "Total spending: Rp2,500,000" in result
-    assert "Sisa: Rp4,500,000" in result
-    assert "dihitung" in result
+    assert report.requested_ranges == [server.REPORT_DASHBOARD_RANGE]
+    assert "Total Income: Rp5,747,875" in result
+    assert "Total Spending: Rp2,548,500" in result
+    assert "Sisa Duit: Rp3,199,375" in result
+    assert "Rp3,434,875" not in result
     assert report.values == [
-        ["Total Income", "Rp7.000.000"],
-        ["Total Spending", "Rp2.500.000"],
+        ["", "Total Income", "", "", "Budgeted Expenses", "", "", "Total Spending"],
+        ["", "Rp5.747.875", "", "", "Rp2.313.000", "", "", "Rp2.548.500"],
+        ["", "Monthly Savings", "", "", "Sisa Duit"],
+        ["", "Rp0", "", "", "Rp3.199.375"],
     ]
 
 
 def test_balance_rejects_empty_or_invalid_report_data():
     server._spreadsheet = FakeSpreadsheet([])
-    assert "kosong atau tidak ditemukan" in server.get_financial_balance()
+    assert "dashboard Report kosong" in server.get_financial_balance()
 
-    server._spreadsheet = FakeSpreadsheet([["Total Income", "Rp7.000.000"], ["Total Spending"]])
-    assert "tidak sesuai" in server.get_financial_balance()
+    server._spreadsheet = FakeSpreadsheet([["Total Income"], ["Total Spending", "bukan nominal"]])
+    assert "Total Income tidak ditemukan atau tidak valid" in server.get_financial_balance()
 
 
 def test_recent_expenses_are_sorted_by_date_not_sheet_row():
