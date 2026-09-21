@@ -51,5 +51,6 @@ jobs:
       - name: Deploy
         run: |
             cd /opt/spending-agent
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
             docker compose up -d --build
