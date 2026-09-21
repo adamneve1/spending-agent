@@ -1,4 +1,10 @@
+import sys
+from pathlib import Path
+
 import pytest
+
+# GitHub Actions may collect tests with only the tests directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import Settings
 
