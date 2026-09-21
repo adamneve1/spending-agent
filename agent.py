@@ -3,8 +3,8 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
@@ -20,12 +20,13 @@ from telegram.ext import (
 )
 
 from scheduler import FinancialReportScheduler, ReportScheduleConfig
+from config import Settings
 
 
-load_dotenv()
+settings = Settings.from_env()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = settings.gemini_api_key
+TELEGRAM_BOT_TOKEN = settings.telegram_bot_token
 
 
 def parse_allowed_user_ids(value: str | None) -> frozenset[int]:
@@ -39,7 +40,7 @@ def parse_allowed_user_ids(value: str | None) -> frozenset[int]:
 
 
 ALLOWED_TELEGRAM_USER_IDS = parse_allowed_user_ids(
-    os.getenv("ALLOWED_TELEGRAM_USER_IDS")
+    settings.allowed_telegram_user_ids
 )
 
 if not GEMINI_API_KEY:
@@ -185,6 +186,12 @@ year or the current year if omitted. Use update_expense only when
 the user provides a Transaction ID and the fields they want changed. For a
 deletion request, tell the user to send exactly: "hapus <Transaction ID>".
 The bot will request confirmation. Never guess a Transaction ID.
+Use get_spending_date_range when the user asks for a spending recap between
+two dates, for example "rekap 1 sampai 15 September 2026". Pass inclusive
+start_date and end_date as YYYY-MM-DD, using the current year if omitted.
+Use get_category_budgets when the user asks about category budgets or remaining
+budget. Budget warnings returned by add_expense or update_expense are factual
+tool output and must be shown to the user.
 
 Extract:
 
@@ -298,7 +305,10 @@ def _add_expense_reply(tool_result: object) -> str:
             "Siap Bos, transaksi sudah tercatat, tapi Transaction ID gagal diperoleh. "
             "Coba cek transaksi terbaru sebelum melakukan update atau hapus."
         )
-    return f"Siap Bos, pengeluaran sudah dicatat.\nTransaction ID: {transaction_id}"
+    warning = re.search(r"\n(⚠️ Budget[^\n]+|Info budget[^\n]+)", result_text)
+    return f"Siap Bos, pengeluaran sudah dicatat.\nTransaction ID: {transaction_id}" + (
+        f"\n{warning.group(1)}" if warning else ""
+    )
 
 
 def _financial_balance_reply(user_input: str, tool_result: object) -> str:
@@ -505,8 +515,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if function_call.name == "add_expense":
                     direct_reply = _add_expense_reply(tool_result)
                     break
+                if function_call.name == "update_expense":
+                    direct_reply = tool_result
+                    break
                 if function_call.name == "get_financial_balance":
                     direct_reply = _financial_balance_reply(user_input, tool_result)
+                    break
+                if function_call.name in {"get_spending_date_range", "get_category_budgets"}:
+                    direct_reply = tool_result
                     break
 
                 # --------------------------------------------
@@ -561,7 +577,7 @@ async def main():
 
     server_params = StdioServerParameters(
         command="python",
-        args=["server.py"],
+        args=[str(Path(__file__).with_name("server.py"))],
         # Pass Docker/.env variables to the separate MCP server process.
         env=os.environ.copy(),
     )
@@ -601,7 +617,7 @@ async def main():
             # ------------------------------------------------
 
             chat = gemini.chats.create(
-                model="gemini-3.1-flash-lite",
+                model=settings.gemini_model,
                 config=types.GenerateContentConfig(
                     tools=[gemini_tool],
                     system_instruction=SYSTEM_PROMPT,

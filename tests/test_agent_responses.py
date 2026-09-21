@@ -35,6 +35,11 @@ def test_agent_never_invents_a_missing_or_invalid_transaction_id(agent_module):
     assert "110926-01" not in missing + invalid
 
 
+def test_agent_shows_budget_warning_after_add(agent_module):
+    result = "Expense berhasil ditambahkan. Transaction ID: 110926-04 | 11 Sep 2026\n⚠️ Budget Food hampir habis: Rp80,000 dari Rp100,000 (80%)."
+    assert "Budget Food hampir habis" in agent_module._add_expense_reply(result)
+
+
 @pytest.mark.parametrize(
     ("question", "expected", "excluded"),
     [

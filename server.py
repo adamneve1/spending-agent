@@ -1,6 +1,5 @@
 import asyncio
 import calendar
-import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
@@ -8,17 +7,17 @@ from typing import Literal, Optional
 import gspread
 from google.oauth2.service_account import Credentials
 from mcp.server.mcpserver import MCPServer
+from config import settings
 
 
-# Column layout of the existing Spending sheet. The ID column is configurable.
-ID_COLUMN = int(os.getenv("EXPENSE_ID_COLUMN", "1"))
-DATE_COLUMN = 3
-DESCRIPTION_COLUMN = 4
-CATEGORY_COLUMN = 6
-AMOUNT_COLUMN = 7
-FIRST_DATA_ROW = 2
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-WORKSHEET_NAME = os.getenv("WORKSHEET_NAME", "Spending")
+ID_COLUMN = settings.expense_id_column
+DATE_COLUMN = settings.expense_date_column
+DESCRIPTION_COLUMN = settings.expense_description_column
+CATEGORY_COLUMN = settings.expense_category_column
+AMOUNT_COLUMN = settings.expense_amount_column
+FIRST_DATA_ROW = settings.expense_first_data_row
+SPREADSHEET_ID = settings.spreadsheet_id
+WORKSHEET_NAME = settings.worksheet_name
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 INDONESIAN_MONTHS = {
     "Jan": "Jan",
@@ -41,7 +40,10 @@ INDONESIAN_MONTH_NAMES = (
 WIB = timezone(timedelta(hours=7), name="WIB")
 TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
 MAX_EXPENSE_AMOUNT = 100_000_000
-REPORT_DASHBOARD_RANGE = "Report!A1:AZ200"
+REPORT_DASHBOARD_RANGE = settings.report_dashboard_range
+BUDGET_WARNING_PERCENT = 80
+BUDGET_TABLE_RANGE = settings.budget_table_range
+BUDGET_PERIOD_RANGE = settings.budget_period_range
 
 _sheet = None
 _spreadsheet = None
@@ -53,7 +55,7 @@ def get_sheet():
     if _sheet is None:
         if not SPREADSHEET_ID:
             raise RuntimeError("SPREADSHEET_ID tidak ditemukan")
-        credentials = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
+        credentials = Credentials.from_service_account_file(str(settings.google_credentials_path), scopes=SCOPES)
         client = gspread.authorize(credentials)
         _spreadsheet = client.open_by_key(SPREADSHEET_ID)
         _sheet = _spreadsheet.worksheet(WORKSHEET_NAME)
@@ -263,6 +265,76 @@ def _category_totals(records: list[dict]) -> dict[str, int]:
     return totals
 
 
+def _category_budgets() -> dict[str, tuple[str, int, int]]:
+    """Read Allocation and Realization from the sheet's budget table."""
+    response = get_spreadsheet().values_get(
+        BUDGET_TABLE_RANGE, params={"valueRenderOption": "FORMATTED_VALUE"}
+    )
+    values = response.get("values", [])
+    for row_index, row in enumerate(values):
+        labels = [_normalise_report_label(value) for value in row]
+        try:
+            category_column = labels.index("expenses list")
+            allocation_column = next(
+                index for index, label in enumerate(labels) if label.startswith("allocation")
+            )
+            realization_column = next(
+                index for index, label in enumerate(labels) if label.startswith(("realization", "realisation"))
+            )
+        except (ValueError, StopIteration):
+            continue
+        budgets = {}
+        for data_row in values[row_index + 1:]:
+            category = _cell(data_row, category_column + 1).strip()
+            allocation = _parse_report_amount(_cell(data_row, allocation_column + 1))
+            realization = _parse_report_amount(_cell(data_row, realization_column + 1)) or 0
+            if category and allocation and allocation > 0:
+                budgets[category.casefold()] = (category, allocation, realization)
+        return budgets
+    raise ValueError("Header Expenses List, Allocation, dan Realization tidak ditemukan di BUDGET_TABLE_RANGE")
+
+
+def _budget_period() -> tuple[int, int]:
+    """Read the year in K2 and month in K3 selected by the Report formulas."""
+    response = get_spreadsheet().values_get(
+        BUDGET_PERIOD_RANGE, params={"valueRenderOption": "FORMATTED_VALUE"}
+    )
+    values = response.get("values", [])
+    try:
+        year = int(str(values[0][0]).strip())
+        month_value = str(values[1][0]).strip()
+        month_names = {name.casefold(): index for index, name in enumerate(INDONESIAN_MONTH_NAMES, start=1)}
+        month_names.update({name.casefold(): index for index, name in enumerate(calendar.month_name) if name})
+        month = month_names.get(month_value.casefold()) or int(month_value)
+    except (IndexError, TypeError, ValueError) as error:
+        raise ValueError("Tahun/bulan budget di Report tidak valid") from error
+    if not 2000 <= year <= 2100 or not 1 <= month <= 12:
+        raise ValueError("Tahun/bulan budget di Report tidak valid")
+    return year, month
+
+
+def _budget_notice(category: str, transaction_date: str) -> str:
+    parsed_date = _parse_expense_date(transaction_date)
+    today = _today_wib()
+    if parsed_date == datetime.min or (parsed_date.year, parsed_date.month) != (today.year, today.month):
+        return ""
+    try:
+        year, month = _budget_period()
+        if (year, month) != (parsed_date.year, parsed_date.month):
+            return "\nInfo budget belum dicek: periode Report berbeda dari bulan transaksi."
+        item = _category_budgets().get(category.casefold())
+    except Exception:
+        return "\nInfo budget belum bisa dibaca dari Report."
+    if item is None:
+        return ""
+    _, budget, spent = item
+    if spent >= budget:
+        return f"\n⚠️ Budget {category} bulan ini terlewati: Rp{spent:,} dari Rp{budget:,}."
+    if spent * 100 >= budget * BUDGET_WARNING_PERCENT:
+        return f"\n⚠️ Budget {category} hampir habis: Rp{spent:,} dari Rp{budget:,} ({spent * 100 // budget}%)."
+    return ""
+
+
 def add_expense(date: str, description: str, category: str, amount: int) -> str:
     """Add an expense and return its generated Transaction ID."""
     if not isinstance(amount, int) or isinstance(amount, bool) or not 0 < amount <= MAX_EXPENSE_AMOUNT:
@@ -279,7 +351,45 @@ def add_expense(date: str, description: str, category: str, amount: int) -> str:
     return (
         f"Expense berhasil ditambahkan. Transaction ID: {transaction_id} | "
         f"{date} | {description} | {category} | Rp{amount:,}"
-    )
+    ) + _budget_notice(category, date)
+
+
+def get_category_budgets() -> str:
+    """Show the current allocation and realization from the sheet."""
+    year, month = _budget_period()
+    budgets = _category_budgets()
+    if not budgets:
+        return "Belum ada kategori dengan Allocation lebih dari nol di tabel budget."
+    lines = [f"Budget kategori {INDONESIAN_MONTH_NAMES[month - 1]} {year} dari Report:"]
+    for category, budget, spent in budgets.values():
+        lines.append(f"- {category}: Rp{spent:,} / Rp{budget:,} ({spent * 100 // budget}%)")
+    return "\n".join(lines)
+
+
+def get_spending_date_range(start_date: str, end_date: str) -> str:
+    """Summarize expenses for an inclusive ISO date range."""
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except (TypeError, ValueError):
+        return "Tanggal harus berformat YYYY-MM-DD."
+    if start > end:
+        return "Tanggal awal tidak boleh setelah tanggal akhir."
+    if (end - start).days > 366:
+        return "Rentang tanggal maksimal 367 hari."
+    records = _records_in_date_range(start, end)
+    total = sum(_parse_expense_amount(record["amount"]) for record in records)
+    lines = [
+        f"Total pengeluaran {start:%d %b %Y}–{end:%d %b %Y}: Rp{total:,}",
+        f"Jumlah transaksi: {len(records)}",
+    ]
+    if records:
+        lines.extend(["", "Per kategori:"])
+        lines.extend(
+            f"- {category}: Rp{amount:,}"
+            for category, amount in sorted(_category_totals(records).items(), key=lambda item: (-item[1], item[0]))
+        )
+    return "\n".join(lines)
 
 
 def get_expense(transaction_id: str) -> str:
@@ -467,7 +577,8 @@ def update_expense(
             changed = True
     if not changed:
         return "Tidak ada perubahan yang diberikan."
-    return f"Expense berhasil diperbarui: {_format_record(_find_expense(transaction_id))}"
+    updated = _find_expense(transaction_id)
+    return f"Expense berhasil diperbarui: {_format_record(updated)}" + _budget_notice(updated["category"], updated["date"])
 
 
 def delete_expense(transaction_id: str) -> str:
@@ -487,6 +598,8 @@ server.add_tool(get_expense, name="get_expense", description="Get an expense by 
 server.add_tool(search_expenses, name="search_expenses", description="Search expenses by text, date, or category.")
 server.add_tool(get_recent_expenses, name="get_recent_expenses", description="Get the latest expenses sorted by date, not sheet row order.")
 server.add_tool(get_spending_summary, name="get_spending_summary", description="Get total spending and category totals for the current WIB week or current WIB month.")
+server.add_tool(get_spending_date_range, name="get_spending_date_range", description="Summarize spending between inclusive start_date and end_date in YYYY-MM-DD format.")
+server.add_tool(get_category_budgets, name="get_category_budgets", description="Show category Allocation and Realization from the budget table in Google Sheets.")
 server.add_tool(compare_monthly_spending, name="compare_monthly_spending", description="Compare total spending and category totals for two selected months in the same year.")
 server.add_tool(get_financial_balance, name="get_financial_balance", description="Read Total Income, Total Spending, and balance from Report!O8:P9.")
 server.add_tool(update_expense, name="update_expense", description="Update an expense by its Transaction ID.")

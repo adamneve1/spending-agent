@@ -33,17 +33,18 @@ class FakeSheet:
 
 def setup_function():
     server._sheet = FakeSheet()
-    server._spreadsheet = None
+    server._spreadsheet = FakeSpreadsheet([["Expenses List", "Allocation", "Realization"]])
 
 
 class FakeSpreadsheet:
-    def __init__(self, values):
+    def __init__(self, values, period=None):
         self.values = values
+        self.period = period or [["2026"], ["August"]]
         self.requested_ranges = []
 
     def values_get(self, cell_range, params=None):
         self.requested_ranges.append(cell_range)
-        return {"values": self.values}
+        return {"values": self.period if cell_range == server.BUDGET_PERIOD_RANGE else self.values}
 
 
 def test_add_creates_id_and_get_finds_expense():
@@ -174,3 +175,57 @@ def test_compare_monthly_spending(monkeypatch):
     assert "- Januari 2026: Rp20,000 (1 transaksi)" in result
     assert "Selisih: naik Rp45,000" in result
     assert "Food: Rp30,000 vs Rp20,000 (naik Rp10,000)" in result
+
+
+def test_category_budget_reads_allocation_and_realization_from_report(monkeypatch):
+    monkeypatch.setattr(server, "_today_wib", lambda: date(2026, 8, 7))
+    report = FakeSpreadsheet([
+        ["Expenses List", "", "Allocation 💰", "", "Realization 💸"],
+        ["Food", "", "Rp100,000", "", "Rp80,000"],
+        ["Bensin", "", "Rp250,000", "", "Rp0"],
+        ["BPJS", "", "", "", "Rp0"],
+    ])
+    server._spreadsheet = report
+    result = server.add_expense("07 Aug 2026", "Makan", "Food", 1000)
+
+    assert "hampir habis: Rp80,000 dari Rp100,000" in result
+    assert "Food: Rp80,000 / Rp100,000" in server.get_category_budgets()
+    assert "Bensin: Rp0 / Rp250,000" in server.get_category_budgets()
+    assert "BPJS" not in server.get_category_budgets()
+    assert report.requested_ranges == [server.BUDGET_PERIOD_RANGE, server.BUDGET_TABLE_RANGE] * 4
+
+    report.values[1][4] = "Rp101,000"
+    assert "terlewati: Rp101,000 dari Rp100,000" in server.update_expense("070826-01", amount=2000)
+
+
+def test_budget_warning_skips_a_different_report_month(monkeypatch):
+    monkeypatch.setattr(server, "_today_wib", lambda: date(2026, 8, 7))
+    report = FakeSpreadsheet([
+        ["Expenses List", "", "Allocation", "", "Realization"],
+        ["Food", "", "Rp100,000", "", "Rp150,000"],
+    ], period=[["2026"], ["July"]])
+    server._spreadsheet = report
+
+    result = server.add_expense("07 Aug 2026", "Makan", "Food", 1000)
+
+    assert "periode Report berbeda" in result
+    assert server.BUDGET_TABLE_RANGE not in report.requested_ranges
+
+
+def test_budget_period_accepts_month_name_from_dropdown():
+    server._spreadsheet = FakeSpreadsheet([], period=[["2026"], ["September"]])
+    assert server._budget_period() == (2026, 9)
+
+
+def test_spending_date_range_inclusive_and_validated():
+    server.add_expense("01 Aug 2026", "Awal", "Food", 10000)
+    server.add_expense("15 Aug 2026", "Akhir", "Bensin", 20000)
+    server.add_expense("16 Aug 2026", "Luar", "Food", 30000)
+
+    result = server.get_spending_date_range("2026-08-01", "2026-08-15")
+    assert "Rp30,000" in result
+    assert "Jumlah transaksi: 2" in result
+    assert "Food: Rp10,000" in result
+    assert "Bensin: Rp20,000" in result
+    assert "Tanggal awal" in server.get_spending_date_range("2026-08-16", "2026-08-01")
+    assert "YYYY-MM-DD" in server.get_spending_date_range("01/08/2026", "2026-08-15")

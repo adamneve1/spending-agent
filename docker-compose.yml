@@ -8,7 +8,7 @@ services:
       - .env
 
     volumes:
-      - ./credentials.json:/app/credentials.json:ro
+      - ${GOOGLE_CREDENTIALS_FILE:-./credentials.json}:/app/credentials.json:ro
       - report-scheduler-state:/app/data
 
 volumes:
