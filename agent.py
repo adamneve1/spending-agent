@@ -188,7 +188,9 @@ first named month, second_month to the second named month, and use the stated
 year or the current year if omitted. Use update_expense only when
 the user provides a Transaction ID and the fields they want changed. For a
 deletion request, tell the user to send exactly: "hapus <Transaction ID>".
-The bot will request confirmation. Never guess a Transaction ID.
+For multiple deletions, the user may include multiple Transaction IDs after
+"hapus" in one message. The bot will request one confirmation for the batch.
+Never guess a Transaction ID.
 Use get_spending_date_range when the user asks for a spending recap between
 two dates, for example "rekap 1 sampai 15 September 2026". Pass inclusive
 start_date and end_date as YYYY-MM-DD, using the current year if omitted.
@@ -262,21 +264,27 @@ tell the user briefly that it was recorded.
 
 mcp_session = None
 chat = None
-pending_deletions: dict[int, tuple[str, float]] = {}
+pending_deletions: dict[int, tuple[tuple[str, ...], float]] = {}
 DELETE_CONFIRMATION_SECONDS = 300
+MAX_BATCH_DELETIONS = 20
 TRANSACTION_ID_PATTERN = re.compile(r"^\d{6}-\d{2}$")
 
 
-def _delete_request_id(message: str) -> str | None:
-    match = re.fullmatch(r"\s*hapus\s+(\d{6}-\d{2})\s*", message, re.IGNORECASE)
-    return match.group(1) if match else None
+def _transaction_ids(text: str) -> tuple[str, ...]:
+    """Extract unique transaction IDs while retaining their message order."""
+    return tuple(dict.fromkeys(re.findall(r"(?<!\d)\d{6}-\d{2}(?!\d)", text)))
 
 
-def _delete_confirmation_id(message: str) -> str | None:
-    match = re.fullmatch(
-        r"\s*konfirmasi\s+hapus\s+(\d{6}-\d{2})\s*", message, re.IGNORECASE
-    )
-    return match.group(1) if match else None
+def _delete_request_ids(message: str) -> tuple[str, ...]:
+    if not re.match(r"^\s*hapus\b", message, re.IGNORECASE):
+        return ()
+    return _transaction_ids(message)
+
+
+def _delete_confirmation_ids(message: str) -> tuple[str, ...]:
+    if not re.match(r"^\s*konfirmasi\s+hapus\b", message, re.IGNORECASE):
+        return ()
+    return _transaction_ids(message)
 
 
 def _tool_result_text(result) -> str:
@@ -394,34 +402,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_input:
         return
 
-    deletion_id = _delete_request_id(user_input)
-    confirmation_id = _delete_confirmation_id(user_input)
+    deletion_ids = _delete_request_ids(user_input)
+    confirmation_ids = _delete_confirmation_ids(user_input)
 
-    if deletion_id:
-        pending_deletions[user_id] = (deletion_id, time.monotonic() + DELETE_CONFIRMATION_SECONDS)
+    if deletion_ids:
+        if len(deletion_ids) > MAX_BATCH_DELETIONS:
+            await update.message.reply_text(f"Maksimal {MAX_BATCH_DELETIONS} transaksi dalam sekali hapus.")
+            return
+        pending_deletions[user_id] = (deletion_ids, time.monotonic() + DELETE_CONFIRMATION_SECONDS)
+        id_list = " ".join(deletion_ids)
         await update.message.reply_text(
-            f"Konfirmasi penghapusan {deletion_id} dengan mengirim: "
-            f"konfirmasi hapus {deletion_id}"
+            f"Konfirmasi penghapusan {len(deletion_ids)} transaksi dengan mengirim:\n"
+            f"konfirmasi hapus {id_list}"
         )
         return
 
-    if confirmation_id:
+    if confirmation_ids:
         pending = pending_deletions.get(user_id)
-        if not pending or pending[0] != confirmation_id or pending[1] < time.monotonic():
+        if not pending or pending[0] != confirmation_ids or pending[1] < time.monotonic():
             pending_deletions.pop(user_id, None)
             await update.message.reply_text(
-                "Konfirmasi tidak valid atau sudah kedaluwarsa. Kirim `hapus <Transaction ID>` lagi."
+                "Konfirmasi tidak valid atau sudah kedaluwarsa. Kirim perintah `hapus` lagi."
             )
             return
         pending_deletions.pop(user_id, None)
-        try:
-            result = await mcp_session.call_tool(
-                "delete_expense", arguments={"transaction_id": confirmation_id}
-            )
-            await update.message.reply_text(_tool_result_text(result))
-        except Exception as error:
-            print(f"[ERROR] Delete confirmation failed: {error!r}")
-            await update.message.reply_text("Penghapusan gagal diproses. Coba lagi.")
+        results = []
+        for transaction_id in confirmation_ids:
+            try:
+                result = await mcp_session.call_tool(
+                    "delete_expense", arguments={"transaction_id": transaction_id}
+                )
+                results.append(f"- {_tool_result_text(result)}")
+            except Exception as error:
+                print(f"[ERROR] Delete {transaction_id} failed: {error!r}")
+                results.append(f"- Penghapusan {transaction_id} gagal. Coba lagi.")
+        await update.message.reply_text("Hasil penghapusan:\n" + "\n".join(results))
         return
 
     print(f"\n[Telegram] user={user_id}")

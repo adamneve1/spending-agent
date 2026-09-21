@@ -66,6 +66,25 @@ def test_agent_combines_multiple_added_expenses_in_one_reply(agent_module):
     assert "Rp973,600 dari Rp500,000" not in reply
 
 
+def test_agent_extracts_batch_delete_ids(agent_module):
+    message = """hapus yang ini:
+- susu dancow — ID 220926-05
+- mie sukses — ID 220926-06
+- telur — ID 220926-07
+- duplikat — ID 220926-05
+"""
+
+    assert agent_module._delete_request_ids(message) == (
+        "220926-05",
+        "220926-06",
+        "220926-07",
+    )
+    assert agent_module._delete_confirmation_ids(
+        "konfirmasi hapus 220926-05 220926-06 220926-07"
+    ) == ("220926-05", "220926-06", "220926-07")
+    assert agent_module._delete_request_ids("tolong cek 220926-05") == ()
+
+
 @pytest.mark.parametrize(
     ("question", "expected", "excluded"),
     [

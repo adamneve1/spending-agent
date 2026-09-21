@@ -21,6 +21,7 @@ Simpan ID ini untuk operasi berikut.
 - Bandingkan: `bandingkan Februari vs Januari` atau `bandingkan Februari vs Januari 2026`
 - Ubah: `ubah 260826-01 jadi 30 ribu`
 - Hapus: `hapus 260826-01`
+- Hapus beberapa sekaligus: `hapus 260826-01 260826-02 260826-03`
 
 Secara default ID disimpan di kolom **A**, sementara kolom transaksi yang
 sudah ada tetap digunakan: tanggal C, deskripsi D, kategori F, dan nominal G.
@@ -87,8 +88,9 @@ docker compose up -d --build
 
 - API keys, Spreadsheet ID, dan Telegram user ID disimpan di `.env`.
 - Hanya Telegram user ID dalam `ALLOWED_TELEGRAM_USER_IDS` yang dapat memakai bot.
-- Hapus transaksi membutuhkan dua pesan: `hapus 260826-01`, lalu
-  `konfirmasi hapus 260826-01` dalam waktu lima menit.
+- Hapus transaksi membutuhkan dua pesan. Beberapa ID dapat dikirim sekaligus,
+  misalnya `hapus 260826-01 260826-02`, lalu konfirmasikan perintah yang
+  diberikan bot dalam waktu lima menit. Maksimal 20 transaksi per batch.
 
 ## Scheduled financial report
 
