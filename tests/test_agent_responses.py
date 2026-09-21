@@ -40,6 +40,32 @@ def test_agent_shows_budget_warning_after_add(agent_module):
     assert "Budget Food hampir habis" in agent_module._add_expense_reply(result)
 
 
+def test_agent_combines_multiple_added_expenses_in_one_reply(agent_module):
+    results = [
+        (
+            {"description": "Susu Dancow", "amount": 4000, "category": "Food"},
+            "Expense berhasil ditambahkan. Transaction ID: 220926-02 | 22 Sep 2026 | Susu Dancow | Food | Rp4,000\n⚠️ Budget Food terlewati: Rp973,600 dari Rp500,000.",
+        ),
+        (
+            {"description": "Mie Sukses isi 2", "amount": 4000, "category": "Food"},
+            "Expense berhasil ditambahkan. Transaction ID: 220926-03 | 22 Sep 2026 | Mie Sukses isi 2 | Food | Rp4,000\n⚠️ Budget Food terlewati: Rp977,600 dari Rp500,000.",
+        ),
+        (
+            {"description": "Telur 5", "amount": 10000, "category": "Food"},
+            "Expense berhasil ditambahkan. Transaction ID: 220926-04 | 22 Sep 2026 | Telur 5 | Food | Rp10,000\n⚠️ Budget Food terlewati: Rp987,600 dari Rp500,000.",
+        ),
+    ]
+
+    reply = agent_module._multiple_add_expenses_reply(results)
+
+    assert "3 pengeluaran sudah dicatat" in reply
+    assert "Susu Dancow: Rp4,000 — ID 220926-02" in reply
+    assert "Mie Sukses isi 2: Rp4,000 — ID 220926-03" in reply
+    assert "Telur 5: Rp10,000 — ID 220926-04" in reply
+    assert "Rp987,600 dari Rp500,000" in reply
+    assert "Rp973,600 dari Rp500,000" not in reply
+
+
 @pytest.mark.parametrize(
     ("question", "expected", "excluded"),
     [

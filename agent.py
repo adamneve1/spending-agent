@@ -161,6 +161,9 @@ Address the user as "Bos" naturally, usually at the start or end of a reply;
 do not repeat the salutation more than once in a single reply.
 
 When the user tells you about a new expense, use add_expense.
+If one message contains multiple distinct purchases, call add_expense once for
+each purchase in the same response. Keep each description and amount separate;
+never combine them into one transaction and do not wait for another user message.
 Never create, calculate, modify, infer, or repeat a Transaction ID. Transaction
 IDs are created only by the MCP server and rendered directly by the application
 from the add_expense tool result.
@@ -311,6 +314,33 @@ def _add_expense_reply(tool_result: object) -> str:
     )
 
 
+def _multiple_add_expenses_reply(results: list[tuple[dict, str]]) -> str:
+    """Build one exact-ID reply for all add_expense calls in a message."""
+    if len(results) == 1:
+        return _add_expense_reply(results[0][1])
+
+    lines = []
+    warnings: dict[str, str] = {}
+    successful = 0
+    for arguments, result_text in results:
+        description = str(arguments.get("description") or "Pengeluaran")
+        transaction_id = _add_expense_transaction_id(result_text)
+        if "Expense berhasil ditambahkan" in result_text and transaction_id:
+            successful += 1
+            amount = arguments.get("amount")
+            amount_text = f"Rp{amount:,}" if isinstance(amount, int) else "nominal tidak tersedia"
+            lines.append(f"- {description}: {amount_text} — ID {transaction_id}")
+        else:
+            lines.append(f"- {description}: {result_text}")
+
+        warning = re.search(r"\n(⚠️ Budget[^\n]+|Info budget[^\n]+)", result_text)
+        if warning:
+            warnings[str(arguments.get("category") or description)] = warning.group(1)
+
+    heading = f"Siap Bos, {successful} pengeluaran sudah dicatat."
+    return "\n".join([heading, *lines, *warnings.values()])
+
+
 def _financial_balance_reply(user_input: str, tool_result: object) -> str:
     """Select exact MCP figures for a financial question without calculating."""
     result_text = str(tool_result)
@@ -412,6 +442,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ----------------------------------------------------
 
         direct_reply = None
+        added_expenses: list[tuple[dict, str]] = []
         if response.function_calls:
 
             for function_call in response.function_calls:
@@ -513,8 +544,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Gemini may understand intent and parameters, but it must not
                 # generate transaction IDs or financial values.
                 if function_call.name == "add_expense":
-                    direct_reply = _add_expense_reply(tool_result)
-                    break
+                    added_expenses.append((arguments, tool_result))
+                    continue
                 if function_call.name == "update_expense":
                     direct_reply = tool_result
                     break
@@ -543,6 +574,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     )
                 )
+
+            if added_expenses and direct_reply is None:
+                direct_reply = _multiple_add_expenses_reply(added_expenses)
 
         # ----------------------------------------------------
         # Kirim jawaban ke Telegram
